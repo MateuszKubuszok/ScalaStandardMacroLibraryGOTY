@@ -89,14 +89,14 @@ Then 3.7 came, and broke our automatic derivation, but we managed to convince th
 
 [.small]
 [%step]
- * we can share macros code between Scala 2 and Scala 3
- * macros are not slow - overworking type checker via implicit resolution is
- * macros can aggregate errors, and know their context - better errors
- * macros can log their internal logic and resulting expression
- * macros have more opportunities to micro-optimize the code
- * while usage of semi-automatic derivation still makes sense - it is not required to use everywhere at all time to keep the project maintainable - that's issue of Shapeless/Circe approach, not the type class derivation itself
- * eye-opening: we can have much better derivation tools
- * not a matter of Chimney being special — doable by every library doing type class derivation
+ * we **can** share macros code between Scala 2 and Scala 3
+ * macros are **not slow** - **abusing type checker** via implicit resolution **is**
+ * macros can **aggregate errors**, and know their context - better errors
+ * macros can **log their internal logic and resulting expression**
+ * macros have **more opportunities to micro-optimize** the code
+ * while usage of semi-auto still makes sense - **it is not required to use everywhere** at all time to keep the project maintainable - that's issue of Shapeless/Circe approach, not the type class derivation itself
+ * eye-opening: we **can have much better derivation tools**
+ * not a matter of Chimney being special — **doable by every library** doing type class derivation
 
 [NOTE.speaker]
 --
@@ -119,6 +119,8 @@ But words are cheap, show me the code. That's what everyone would ask. Everythin
 --
 
 === "The code" (& numbers)
+
+=== !
 
 [cols="1,1"]
 |===
@@ -517,24 +519,6 @@ image::img/pollock.jpg[alt="Jackson Pollock's image",width="66%"]
 
 (Not a macro, but looks very similar)
 
-=== !
-
-[.small]
-[cols="1,1"]
-|===
-| Scala 2 (Quasiquotes)
-| Scala 3 (Quotes)
-a|
-[%step]
- * gluing strings instead of typed code
- * but at least these strings resemble the real code
- * and compiler checks them
-a|
-[%step]
- * gluing expressions as every other real code
- * but it's not an expression, we are gluing together untyped trees
-|===
-
 [NOTE.speaker]
 --
 Perhaps with LLMs we might try, but still to get it right you would have to tell the LLM to write something like a gazillion examples and then generate the code for all of them and then check if it compiles and then if it runs and if it does exactly the thing you want. So even if you have an AI doing it for you, you could still spend several weeks, maybe months to get it right just because every single new use case would be something completely unexpected.
@@ -742,11 +726,17 @@ that we could just pattern-match.
 [.small]
 [source, scala]
 --
+val expr: Expr[A] = ...
+
 Type[A] match {
   case IsCollection(isCollection) =>
-    import isCollection.Underlying as Item
-    val iterable = isCollection.value.asIterable(collection)
-    iterable.map { item => ... }
+    import isCollection.{ Underlying as Item, value => isCollectionOfItem }
+    // Now we can use `Item` as the type of the collection elements
+
+    val iterable: Expr[Iterable[Item]] = isCollectionOfItem.asIterable(expr)
+    Expr.quote {
+      Expr.splice(iterable).map { (item: Item) => ... } // Type[Item] is handled
+    }
   case _ => ...
 }
 --
@@ -763,13 +753,18 @@ You know what, since we already have this API it would be nice if it would also 
 [.small]
 [source, scala]
 --
+val outer: Expr[A] = ...
+
 Type[A] match {
   case IsValueType(isValueType) =>
-    import isValueType.Underlying as Inner
-    val unwrapped = isValueType.value.unwrap(Expr.quote(outer))
-    isValueType.value.wrap match {
+    import isValueType.{ Underlying as Inner, value => outerIsValueType }
+    // Now we can use Inner as the value class's underlying type
+
+    val unwrapped: Expr[Inner] = outerIsValueType.unwrap(outer)
+    outerIsValueType.wrap match {
       case CtorLikeOf.PlainValue(ctor, _) =>
-        ctor(Expr.quote(builder))
+        ctor(unwrapped) // <-- wrapped again, not really useful but possible
+      case _ => // other constructors
     }
   case _ => ...
 }
@@ -785,13 +780,23 @@ What if we did this also for value classes? Maybe we could come up with an API l
 [.small]
 [source, scala]
 --
-// No imports needed! Just add the integration dependency.
+import cats.data.NonEmptyList
+import eu.timepit.refined.Refined
+import eu.timepit.refined.collection.NonEmpty
+import eu.timepit.refined.numeric.Positive
 
 case class WithNEL(values: NonEmptyList[Int])
 case class RefinedPerson(
   name: String Refined NonEmpty,
   age: Int Refined Positive
 )
+--
+
+[.small]
+[source, scala]
+--
+import hearth.kindling.circederivation._
+// No imports for derivation needed! Just add the integration as dependency.
 
 // These just work — encoding, decoding, validation:
 KindlingsEncoder.encode(WithNEL(NonEmptyList.of(1, 2, 3)))
@@ -829,12 +834,12 @@ If it's surprising to you, what if you were able to easily debug this? Because y
 
 === And traced it like this:
 
-[.small]
+[.smaller]
 [source, scala]
 --
 Test / scalacOptions ++= Seq(
-"-Xmacro-settings:hearth.mioBenchmarkScopes=true",
-s"-Xmacro-settings:hearth.mioBenchmarkFlameGraphDir=${crossTarget.value / "graphs"}"
+  "-Xmacro-settings:hearth.mioBenchmarkScopes=true",
+  s"-Xmacro-settings:hearth.mioBenchmarkFlameGraphDir=${crossTarget.value / "flame-graphs"}"
 )
 --
 
